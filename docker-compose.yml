@@ -1,0 +1,163 @@
+# Docker Compose Configuration for Local Development
+#
+# What: Orchestrates all required services for local development
+# Why: Consistent dev environment, easy setup, matches production architecture
+# How: Docker Compose manages OpenSearch, PostgreSQL, Redis containers
+#
+# Services:
+# - OpenSearch: Vector search engine (ports: 9200, 9600)
+# - PostgreSQL: SQL database (port: 5432)
+# - Redis: Caching layer (port: 6379)
+#
+# Usage:
+#   Start all services:    docker-compose up -d
+#   Stop all services:     docker-compose down
+#   View logs:             docker-compose logs -f
+#   Restart service:       docker-compose restart opensearch
+#   Remove volumes:        docker-compose down -v
+
+version: '3.8'
+
+services:
+  # OpenSearch: Vector Search Engine
+  # Purpose: Store and search text/visual embeddings
+  # Why: Specialized for k-NN vector similarity search
+  opensearch:
+    image: opensearchproject/opensearch:2.11.0
+    container_name: multimodal-rag-opensearch
+    environment:
+      # Cluster configuration
+      - cluster.name=multimodal-rag-cluster
+      - node.name=opensearch-node1
+      - discovery.type=single-node
+
+      # Security (disabled for local dev, enable in production)
+      - DISABLE_SECURITY_PLUGIN=true
+      - DISABLE_INSTALL_DEMO_CONFIG=true
+
+      # Performance tuning for local dev
+      - bootstrap.memory_lock=true
+      - "OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m"
+
+      # k-NN plugin (for vector search)
+      - "knn.plugin.enabled=true"
+      - "knn.algo_param.index_thread_qty=1"
+
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+
+    volumes:
+      - opensearch-data:/usr/share/opensearch/data
+
+    ports:
+      - "9200:9200"  # HTTP API
+      - "9600:9600"  # Performance analyzer
+
+    networks:
+      - multimodal-rag-network
+
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9200/_cluster/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  # PostgreSQL: SQL Database
+  # Purpose: Store structured metadata (papers, filings, users)
+  # Why: ACID transactions, complex queries, referential integrity
+  postgres:
+    image: postgres:15-alpine
+    container_name: multimodal-rag-postgres
+    environment:
+      - POSTGRES_DB=multimodal_rag
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_INITDB_ARGS=--encoding=UTF-8
+
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      # Optional: mount init scripts
+      # - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/init.sql
+
+    ports:
+      - "5432:5432"
+
+    networks:
+      - multimodal-rag-network
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis: Caching Layer
+  # Purpose: Cache embeddings, responses, rate limiting
+  # Why: Fast in-memory storage, reduces API calls, improves latency
+  redis:
+    image: redis:7-alpine
+    container_name: multimodal-rag-redis
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+
+    volumes:
+      - redis-data:/data
+
+    ports:
+      - "6379:6379"
+
+    networks:
+      - multimodal-rag-network
+
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Optional: Airflow (commented out for initial setup)
+  # Uncomment when ready to implement batch processing
+  # airflow-webserver:
+  #   image: apache/airflow:2.7.3-python3.11
+  #   container_name: multimodal-rag-airflow
+  #   environment:
+  #     - AIRFLOW__CORE__EXECUTOR=LocalExecutor
+  #     - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://postgres:postgres@postgres:5432/airflow
+  #     - AIRFLOW__CORE__LOAD_EXAMPLES=False
+  #   volumes:
+  #     - ./airflow/dags:/opt/airflow/dags
+  #     - ./airflow/logs:/opt/airflow/logs
+  #     - ./airflow/plugins:/opt/airflow/plugins
+  #   ports:
+  #     - "8080:8080"
+  #   networks:
+  #     - multimodal-rag-network
+  #   depends_on:
+  #     - postgres
+
+# Networks
+# Why: Isolate services from host network, allow inter-service communication
+networks:
+  multimodal-rag-network:
+    driver: bridge
+    name: multimodal-rag-network
+
+# Volumes (Persistent Data)
+# Why: Persist data across container restarts
+volumes:
+  opensearch-data:
+    driver: local
+    name: multimodal-rag-opensearch-data
+
+  postgres-data:
+    driver: local
+    name: multimodal-rag-postgres-data
+
+  redis-data:
+    driver: local
+    name: multimodal-rag-redis-data

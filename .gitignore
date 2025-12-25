@@ -113,12 +113,14 @@ data/
 images/
 embeddings/
 
-# Model weights
-models/
+# Model weights (top-level models directory only, not src/models)
+/models/
 *.pt
 *.pth
 *.h5
 *.pb
+*.ckpt
+*.safetensors
 
 # Documentation build
 docs/_build/
